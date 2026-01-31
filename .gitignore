@@ -16,3 +16,10 @@ pubspec.lock
 
 # Test
 coverage/
+
+# Server binary (large file)
+bin/server
+bin/server-*
+bin/*.exe
+bin/data/
+bin/config.yaml

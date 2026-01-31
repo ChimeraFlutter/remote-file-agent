@@ -2,6 +2,54 @@
 
 A Flutter/Dart package for remote file management agent with WebSocket communication, automatic reconnection, and file operations.
 
+## Project Structure
+
+```
+remote_file_agent/
+├── lib/                    # Flutter/Dart 库源码
+├── example/                # 使用示例
+└── bin/                    # 预编译的 Server
+    ├── server              # 服务器可执行文件
+    ├── config.yaml.example # 配置模板
+    ├── web/                # Web 管理台
+    └── README.md           # Server 启动指南
+```
+
+## Quick Start
+
+### 1. 启动 Server
+
+```bash
+cd bin
+cp config.yaml.example config.yaml
+./server
+```
+
+Server 将在 `http://localhost:18120` 启动。详细说明见 [bin/README.md](bin/README.md)。
+
+### 2. 使用 Flutter Agent
+
+```dart
+import 'package:remote_file_agent/remote_file_agent.dart';
+
+void main() async {
+  final agent = await RemoteFileAgent.create(
+    serverUrl: 'ws://localhost:18120/ws/agent',
+    enrollToken: 'your-secret-token-change-me',  // 与 Server 配置一致
+    allowedPaths: ['/Users/mac/Desktop'],
+    maxReconnectAttempts: -1,
+  );
+
+  agent.onStatusChanged((status) => print('Status: $status'));
+  await agent.start();
+}
+```
+
+### 3. 访问 Web 管理台
+
+- URL: http://localhost:18120/admin/login.html
+- 密码: `Acewill2025`（或配置文件中设置的密码）
+
 ## Features
 
 - WebSocket-based real-time communication
