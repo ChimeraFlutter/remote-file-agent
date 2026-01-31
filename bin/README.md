@@ -29,11 +29,11 @@ cp config.yaml.example config.yaml
 server:
   host: "0.0.0.0"
   port: 18120
-  admin_password: "Acewill2025"              # 修改管理台密码
-  agent_enroll_token: "your-secret-token"    # 修改 Agent 注册令牌
+  admin_password: "your-password"          # 设置管理台密码
+  agent_enroll_token: "your-token"         # 设置 Agent 注册令牌
 ```
 
-**重要**: 请修改 `agent_enroll_token`，并确保 Flutter Agent 使用相同的令牌。
+**重要**: 请修改 `admin_password` 和 `agent_enroll_token`，并确保 Flutter Agent 使用相同的令牌。
 
 ### 3. 启动服务器
 
@@ -59,7 +59,7 @@ curl http://localhost:18120/health
 启动服务器后，访问：
 
 - **登录页面**: http://localhost:18120/admin/login.html
-- **密码**: 配置文件中的 `admin_password`（默认 `Acewill2025`）
+- **密码**: 配置文件中的 `admin_password`
 
 ## 配合 Flutter Agent 使用
 

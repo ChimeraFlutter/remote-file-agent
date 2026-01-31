@@ -35,7 +35,7 @@ import 'package:remote_file_agent/remote_file_agent.dart';
 void main() async {
   final agent = await RemoteFileAgent.create(
     serverUrl: 'ws://localhost:18120/ws/agent',
-    enrollToken: 'your-secret-token-change-me',  // 与 Server 配置一致
+    enrollToken: 'change-me-to-your-token',  // 与 Server 配置一致
     allowedPaths: ['/Users/mac/Desktop'],
     maxReconnectAttempts: -1,
   );
@@ -48,7 +48,7 @@ void main() async {
 ### 3. 访问 Web 管理台
 
 - URL: http://localhost:18120/admin/login.html
-- 密码: `Acewill2025`（或配置文件中设置的密码）
+- 密码: 配置文件 `config.yaml` 中的 `admin_password`
 
 ## Features
 
