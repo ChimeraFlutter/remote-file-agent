@@ -14,6 +14,8 @@ enum MessageType {
   compressResp,
   uploadReq,
   uploadResp,
+  fileInfoReq,
+  fileInfoResp,
   progress,
   heartbeat,
   error,
@@ -47,6 +49,10 @@ extension MessageTypeExtension on MessageType {
         return 'upload_req';
       case MessageType.uploadResp:
         return 'upload_resp';
+      case MessageType.fileInfoReq:
+        return 'file_info_req';
+      case MessageType.fileInfoResp:
+        return 'file_info_resp';
       case MessageType.progress:
         return 'progress';
       case MessageType.heartbeat:
@@ -82,6 +88,10 @@ extension MessageTypeExtension on MessageType {
         return MessageType.uploadReq;
       case 'upload_resp':
         return MessageType.uploadResp;
+      case 'file_info_req':
+        return MessageType.fileInfoReq;
+      case 'file_info_resp':
+        return MessageType.fileInfoResp;
       case 'progress':
         return MessageType.progress;
       case 'heartbeat':
