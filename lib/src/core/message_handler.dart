@@ -76,6 +76,7 @@ class MessageHandler {
           envelope.reqId,
           'PATH_OUTSIDE_WHITELIST',
           'Path not in whitelist',
+          path: path,
         );
         return;
       }
@@ -124,6 +125,7 @@ class MessageHandler {
           envelope.reqId,
           'PATH_OUTSIDE_WHITELIST',
           'Path not in whitelist',
+          path: path,
         );
         return;
       }
@@ -181,6 +183,7 @@ class MessageHandler {
           envelope.reqId,
           'PATH_OUTSIDE_WHITELIST',
           'Path not in whitelist',
+          path: targetPath,
         );
         return;
       }
@@ -224,6 +227,7 @@ class MessageHandler {
           envelope.reqId,
           'PATH_OUTSIDE_WHITELIST',
           'Path not in whitelist',
+          path: targetPath,
         );
         return;
       }
@@ -269,6 +273,7 @@ class MessageHandler {
           envelope.reqId,
           'PATH_OUTSIDE_WHITELIST',
           'Path not in whitelist',
+          path: targetPath,
         );
         return;
       }
@@ -425,12 +430,14 @@ class MessageHandler {
   Future<void> _sendErrorResponse(
     String reqId,
     String code,
-    String message,
-  ) async {
+    String message, {
+    String? path,
+  }) async {
     final errorPayload = {
       'code': code,
       'message': message,
       'req_id': reqId,
+      if (path != null) 'path': path,
     };
 
     final response = Envelope(
