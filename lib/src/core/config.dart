@@ -1,3 +1,5 @@
+import 'package:path/path.dart' as p;
+
 import '../models/message.dart';
 
 /// Agent configuration class
@@ -47,7 +49,8 @@ class AgentConfig {
     final roots = <AllowedRoot>[];
     for (int i = 0; i < allowedPaths.length; i++) {
       final path = allowedPaths[i];
-      final name = path.split('/').last;
+      // Use path.basename() to correctly handle both Windows and Unix paths
+      final name = p.basename(path);
       roots.add(AllowedRoot(
         rootId: 'root_$i',
         name: name,
