@@ -167,6 +167,38 @@ class FileService {
     return digest.toString();
   }
 
+  /// Check if path exists and get basic info (lightweight, no hash calculation)
+  Future<Map<String, dynamic>> checkPath(String targetPath) async {
+    // Check if it's a directory
+    final dir = Directory(targetPath);
+    if (await dir.exists()) {
+      final stat = await dir.stat();
+      return {
+        'path': targetPath,
+        'name': path.basename(targetPath),
+        'is_dir': true,
+        'size': 0,
+        'modified_time': stat.modified.millisecondsSinceEpoch ~/ 1000,
+      };
+    }
+
+    // Check if it's a file
+    final file = File(targetPath);
+    if (await file.exists()) {
+      final stat = await file.stat();
+      return {
+        'path': targetPath,
+        'name': path.basename(targetPath),
+        'is_dir': false,
+        'size': stat.size,
+        'modified_time': stat.modified.millisecondsSinceEpoch ~/ 1000,
+      };
+    }
+
+    // Path doesn't exist
+    throw Exception('Path not found: $targetPath');
+  }
+
   /// Get file info (for upload)
   Future<Map<String, dynamic>> getFileInfo(String filePath) async {
     final file = File(filePath);

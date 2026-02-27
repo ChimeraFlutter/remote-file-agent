@@ -209,7 +209,7 @@ class MessageHandler {
   /// Handle file info request (get file metadata without reading content)
   Future<void> _handleFileInfoRequest(Envelope envelope) async {
     try {
-      final payload = envelope.payload as Map<String, dynamic>;
+      final payload = envelope.payload as Map<String, dynamic>;\
       final targetPath = payload['path'] as String;
 
       // Validate path
@@ -232,16 +232,16 @@ class MessageHandler {
         return;
       }
 
-      // Get file info only (no file content)
-      final fileInfo = await fileService.getFileInfo(targetPath);
+      // Use checkPath instead of getFileInfo (lightweight, no hash calculation)
+      final pathInfo = await fileService.checkPath(targetPath);
 
-      // Send response with file info only
+      // Send response with path info
       final response = Envelope(
         type: MessageType.fileInfoResp,
         reqId: envelope.reqId,
         timestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
         deviceId: wsService.deviceId,
-        payload: fileInfo,
+        payload: pathInfo,
       );
 
       await wsService.sendMessage(response);
