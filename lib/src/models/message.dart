@@ -1,4 +1,5 @@
 import 'dart:convert';
+import '../utils/logger.dart';
 
 /// Message types for WebSocket communication
 enum MessageType {
@@ -121,12 +122,24 @@ class Envelope {
   });
 
   factory Envelope.fromJson(Map<String, dynamic> json) {
+    // Payload must be a Map (JSON object)
+    dynamic payloadData = json['payload'];
+    Map<String, dynamic> payload;
+
+    if (payloadData is Map<String, dynamic>) {
+      payload = payloadData;
+    } else {
+      // This should not happen if Go server is sending JSON correctly
+      AppLogger.error('Envelope: Payload is not a JSON object! Type: ${payloadData.runtimeType}');
+      payload = {};
+    }
+
     return Envelope(
       type: MessageTypeExtension.fromJson(json['type'] as String),
       reqId: json['req_id'] as String,
       timestamp: json['ts'] as int,
       deviceId: json['device_id'] as String,
-      payload: json['payload'] as Map<String, dynamic>,
+      payload: payload,
     );
   }
 

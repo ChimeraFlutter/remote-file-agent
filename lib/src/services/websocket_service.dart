@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:uuid/uuid.dart';
 import '../models/message.dart';
+import '../utils/logger.dart';
 
 /// Connection status
 enum ConnectionStatus {
@@ -179,22 +181,29 @@ class WebSocketService {
   /// Handle incoming messages
   void _handleMessage(dynamic data) {
     try {
+      AppLogger.debug('WebSocket: Received raw message: ${data.toString().substring(0, min(200, data.toString().length))}');
       final json = jsonDecode(data as String) as Map<String, dynamic>;
+      AppLogger.debug('WebSocket: Decoded JSON, type=${json['type']}');
       final envelope = Envelope.fromJson(json);
+      AppLogger.info('WebSocket: Parsed envelope, type=${envelope.type}, reqId=${envelope.reqId}');
 
       // Handle specific message types
       switch (envelope.type) {
         case MessageType.helloAck:
+          AppLogger.info('WebSocket: Handling helloAck');
           _handleHelloAck(envelope);
           break;
         case MessageType.error:
+          AppLogger.warning('WebSocket: Handling error message');
           _handleErrorMessage(envelope);
           break;
         default:
           // Forward to message stream
+          AppLogger.info('WebSocket: Forwarding message to stream, type=${envelope.type}');
           _messageController.add(envelope);
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      AppLogger.error('WebSocket: Error handling message', e, stackTrace);
       _errorController.add('Failed to parse message: $e');
     }
   }

@@ -15,6 +15,9 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import ntpath  # For Windows path handling
 import logging
+import threading
+import time
+import zipfile  # For auto-extracting downloaded zip files
 
 # Ensure UTF-8 encoding for stdin/stdout on Windows
 if sys.platform == 'win32':
@@ -40,15 +43,37 @@ def setup_logging():
     hour = now.strftime("%H-00")
     log_file = os.path.join(full_log_dir, f"Python-{hour}.log")
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
-            logging.StreamHandler(sys.stderr)
-        ]
-    )
-    return logging.getLogger(__name__)
+    # Create file handler
+    file_handler = logging.FileHandler(log_file, encoding='utf-8', delay=False)
+
+    # Create formatter
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+
+    # Configure logger
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.DEBUG)
+
+    # Add handlers
+    logger.handlers.clear()
+    logger.addHandler(file_handler)
+    logger.addHandler(logging.StreamHandler(sys.stderr))
+
+    # Start background thread to flush logs every 3 seconds
+    def flush_logs_periodically():
+        """Flush log handlers every 3 seconds to ensure logs are written to disk immediately"""
+        while True:
+            time.sleep(3)
+            try:
+                for handler in logger.handlers:
+                    handler.flush()
+            except:
+                pass
+
+    flush_thread = threading.Thread(target=flush_logs_periodically, daemon=True)
+    flush_thread.start()
+
+    return logger
 
 logger = setup_logging()
 
@@ -82,7 +107,9 @@ class RemoteFileClient:
         req = urllib.request.Request(url, data=data, headers=headers, method='POST')
 
         try:
-            with urllib.request.urlopen(req, timeout=30) as response:
+            # Increase timeout for large file compression (10 minutes)
+            logger.debug(f"Calling RPC method: {method} with timeout=600s")
+            with urllib.request.urlopen(req, timeout=600) as response:
                 result = json.loads(response.read().decode('utf-8'))
 
                 if "error" in result:
@@ -95,9 +122,16 @@ class RemoteFileClient:
         except urllib.error.URLError as e:
             raise Exception(f"URL error: {e.reason}")
 
-    def list_devices(self) -> List[Dict[str, Any]]:
-        """List all online devices"""
-        return self._call_rpc("list_devices", {})
+    def list_devices(self, device_name_filter: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List all online devices, optionally filtered by device name"""
+        devices = self._call_rpc("list_devices", {})
+
+        # Apply client-side filtering if filter is provided
+        if device_name_filter:
+            filtered = [d for d in devices if device_name_filter in d.get("device_name", "")]
+            return filtered
+
+        return devices
 
     def select_device(self, device_name: str) -> Dict[str, Any]:
         """Select device by name"""
@@ -118,13 +152,92 @@ class RemoteFileClient:
 class LogDownloaderMCP:
     """MCP Server for log downloading"""
 
-    def __init__(self, mcp_url: str, mcp_token: str):
+    def __init__(self, mcp_url: str, mcp_token: str, download_dir: str = r"C:\logs\device-logs"):
         self.client = RemoteFileClient(mcp_url, mcp_token)
+        self.download_dir = download_dir
+        # Extract the real host from MCP_URL to fix 0.0.0.0 URLs returned by the Go server
+        from urllib.parse import urlparse
+        parsed = urlparse(mcp_url)
+        self._mcp_host = parsed.hostname or "localhost"
+        self._mcp_port = parsed.port
+        logger.debug(f"LogDownloaderMCP initialized with mcp_url: {mcp_url}")
+        logger.debug(f"Extracted _mcp_host: {self._mcp_host}, _mcp_port: {self._mcp_port}")
+
+    def _fix_download_url(self, url: str) -> str:
+        """Replace 0.0.0.0 with the real host from MCP_URL"""
+        logger.debug(f"_fix_download_url called with url: {url}")
+        logger.debug(f"_mcp_host: {self._mcp_host}, _mcp_port: {self._mcp_port}")
+
+        if "0.0.0.0" in url:
+            url = url.replace("0.0.0.0", self._mcp_host)
+            logger.debug(f"Replaced 0.0.0.0 with {self._mcp_host}, new url: {url}")
+
+        return url
+
+    def _download_file_locally(self, download_url: str, save_dir: str, filename: str) -> str:
+        """Download a file from URL and save to local directory. Returns the local file path."""
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, filename)
+
+        fixed_url = self._fix_download_url(download_url)
+        logger.info(f"Downloading {fixed_url} -> {save_path}")
+
+        headers = {"Authorization": f"Bearer {self.client.token}"}
+        req = urllib.request.Request(fixed_url, headers=headers)
+
+        try:
+            # Increase timeout for large file downloads (10 minutes)
+            logger.debug(f"Starting download with timeout=600s")
+            with urllib.request.urlopen(req, timeout=600) as response:
+                with open(save_path, "wb") as f:
+                    f.write(response.read())
+
+            logger.info(f"Downloaded successfully: {save_path}")
+
+            # Auto-extract if it's a zip file
+            if save_path.lower().endswith('.zip'):
+                extract_dir = self._extract_zip(save_path, save_dir)
+                if extract_dir:
+                    logger.info(f"Auto-extracted to: {extract_dir}")
+
+            return save_path
+        except urllib.error.HTTPError as http_err:
+            logger.error(f"HTTP Error downloading {fixed_url}: {http_err.code} {http_err.reason}")
+            logger.error(f"HTTP Error response: {http_err.read().decode('utf-8')}")
+            raise
+        except Exception as e:
+            logger.error(f"Error downloading {fixed_url}: {str(e)}", exc_info=True)
+            raise
+
+    def _extract_zip(self, zip_path: str, extract_to: str) -> Optional[str]:
+        """Extract a zip file to the specified directory. Returns the extraction directory path."""
+        try:
+            # Create extraction directory name (remove .zip extension)
+            base_name = os.path.splitext(os.path.basename(zip_path))[0]
+            extract_dir = os.path.join(extract_to, base_name)
+
+            logger.info(f"Extracting {zip_path} to {extract_dir}")
+
+            # Extract the zip file
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_dir)
+
+            # Count extracted files
+            file_count = sum(len(files) for _, _, files in os.walk(extract_dir))
+            logger.info(f"Extracted {file_count} files to {extract_dir}")
+
+            return extract_dir
+        except zipfile.BadZipFile:
+            logger.error(f"Bad zip file: {zip_path}")
+            return None
+        except Exception as e:
+            logger.error(f"Error extracting {zip_path}: {str(e)}", exc_info=True)
+            return None
 
     def download_daily_logs(
         self,
         device_name: str,
-        days_ago: int = 1,
+        days_ago: int = 0,
         log_types: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """
@@ -176,39 +289,114 @@ class LogDownloaderMCP:
             try:
                 path_info = self.client.check_path(path)
                 if not path_info.get("exists"):
-                    results.append({
-                        "log_type": log_type,
-                        "date": date_str,
-                        "path": path,
-                        "exists": False,
-                        "error": "Path does not exist"
-                    })
-                    continue
+                    # For backend logs, mark as skipped instead of error
+                    if log_type == "backend":
+                        logger.warning(f"Backend log path does NOT exist: {path}")
+                        results.append({
+                            "log_type": log_type,
+                            "date": date_str,
+                            "path": path,
+                            "exists": False,
+                            "skipped": True,
+                            "message": "Backend log does not exist, skipped"
+                        })
+                        continue
+                    else:
+                        # For client logs, report as error
+                        logger.error(f"Client log path does NOT exist: {path}")
+                        results.append({
+                            "log_type": log_type,
+                            "date": date_str,
+                            "path": path,
+                            "exists": False,
+                            "error": "Path does not exist"
+                        })
+                        continue
 
                 # Get download link
+                logger.info(f"[{log_type}] Getting download link for: {path}")
                 link_info = self.client.get_download_link(
                     paths=[path],
                     description=f"{log_type}-logs-{date_str}"
                 )
+                logger.debug(f"[{log_type}] Got download link info: {link_info}")
+                original_download_url = link_info["download_url"]
+                logger.debug(f"[{log_type}] Download URL: {original_download_url}")
+                logger.info(f"[{log_type}] File info - size: {link_info.get('file_size')} bytes, compressed: {link_info.get('compressed')}, expires: {link_info.get('expires_at')}")
+
+                # Check if file size is 0 (empty directory)
+                if link_info.get("file_size", 0) == 0:
+                    logger.error(f"[{log_type}] SKIP DOWNLOAD: Directory exists but contains NO log files (file_size=0). Path: {path}")
+                    results.append({
+                        "log_type": log_type,
+                        "date": date_str,
+                        "path": path,
+                        "exists": True,
+                        "error": "Directory exists but has no log files (file_size=0)",
+                        "file_size": 0
+                    })
+                    continue
+
+                # Fix 0.0.0.0 in URL
+                download_url = self._fix_download_url(original_download_url)
+                logger.debug(f"[{log_type}] Fixed URL: {download_url}")
+
+                # Auto-download file to local logs directory
+                safe_device = device_name.replace("/", "_").replace("\\", "_")
+                local_dir = os.path.join(self.download_dir, safe_device, date_str)
+                try:
+                    logger.info(f"[{log_type}] Starting download -> {local_dir}/{link_info['file_name']}")
+                    local_path = self._download_file_locally(
+                        download_url, local_dir, link_info["file_name"]
+                    )
+                    logger.info(f"[{log_type}] Download SUCCESS: {local_path}")
+
+                    # Check if extracted directory exists
+                    extracted_dir = None
+                    if local_path and local_path.lower().endswith('.zip'):
+                        base_name = os.path.splitext(os.path.basename(local_path))[0]
+                        potential_extract_dir = os.path.join(local_dir, base_name)
+                        if os.path.isdir(potential_extract_dir):
+                            extracted_dir = potential_extract_dir
+                except Exception as dl_err:
+                    logger.error(f"[{log_type}] Download FAILED: {dl_err}", exc_info=True)
+                    local_path = None
+                    extracted_dir = None
 
                 results.append({
                     "log_type": log_type,
                     "date": date_str,
                     "path": path,
                     "exists": True,
-                    "download_url": link_info["download_url"],
+                    "download_url": download_url,
                     "file_name": link_info["file_name"],
                     "file_size": link_info["file_size"],
                     "compressed": link_info["compressed"],
-                    "expires_at": link_info["expires_at"]
+                    "expires_at": link_info["expires_at"],
+                    "local_path": local_path,
+                    "extracted_dir": extracted_dir
                 })
             except Exception as e:
-                results.append({
-                    "log_type": log_type,
-                    "date": date_str,
-                    "path": path,
-                    "error": str(e)
-                })
+                # For backend logs, mark as skipped on error
+                if log_type == "backend":
+                    logger.error(f"[{log_type}] Backend log error (skipping): {e}", exc_info=True)
+                    results.append({
+                        "log_type": log_type,
+                        "date": date_str,
+                        "path": path,
+                        "skipped": True,
+                        "message": f"Backend log error, skipped: {str(e)}"
+                    })
+                    continue
+                else:
+                    # For client logs, report error
+                    logger.error(f"[{log_type}] Client log error: {e}", exc_info=True)
+                    results.append({
+                        "log_type": log_type,
+                        "date": date_str,
+                        "path": path,
+                        "error": str(e)
+                    })
 
         return results
 
@@ -241,12 +429,17 @@ class LogDownloaderMCP:
                             "description": "列出所有在线设备",
                             "inputSchema": {
                                 "type": "object",
-                                "properties": {}
+                                "properties": {
+                                    "device_name_filter": {
+                                        "type": "string",
+                                        "description": "Optional device name filter (fuzzy matching, e.g., '扬州')"
+                                    }
+                                }
                             }
                         },
                         {
                             "name": "download_daily_logs",
-                            "description": "Download device logs for a specific date",
+                            "description": "Download device logs for a specific date. Files are saved locally and local_path is returned so the AI can read them directly.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -257,7 +450,7 @@ class LogDownloaderMCP:
                                     "days_ago": {
                                         "type": "integer",
                                         "description": "Number of days ago (0=today, 1=yesterday, 2=day before yesterday, etc.)",
-                                        "default": 1
+                                        "default": 0
                                     },
                                     "log_types": {
                                         "type": "array",
@@ -278,15 +471,26 @@ class LogDownloaderMCP:
                 tool_params = params.get("arguments", {})
 
                 if tool_name == "list_devices":
-                    result = self.client.list_devices()
+                    device_name_filter = tool_params.get("device_name_filter")
+                    tool_result = self.client.list_devices(device_name_filter)
                 elif tool_name == "download_daily_logs":
-                    result = self.download_daily_logs(
+                    tool_result = self.download_daily_logs(
                         device_name=tool_params["device_name"],
-                        days_ago=tool_params.get("days_ago", 1),
+                        days_ago=tool_params.get("days_ago", 0),
                         log_types=tool_params.get("log_types")
                     )
                 else:
                     raise Exception(f"Unknown tool: {tool_name}")
+
+                # Format result according to MCP spec
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(tool_result, ensure_ascii=False, indent=2)
+                        }
+                    ]
+                }
 
             else:
                 raise Exception(f"Unknown method: {method}")
@@ -310,11 +514,16 @@ class LogDownloaderMCP:
     def run_stdio_server(self):
         """Run MCP server using stdio transport"""
         logger.info("Entering stdio server loop...")
+        logger.info(f"stdin isatty: {sys.stdin.isatty()}")
+        logger.info(f"stdout isatty: {sys.stdout.isatty()}")
 
         while True:
             try:
                 # Read request from stdin
+                logger.debug("Waiting for input from stdin...")
                 line = sys.stdin.readline()
+                logger.debug(f"Read line: {repr(line[:100]) if line else 'None'}")
+
                 if not line:
                     logger.info("EOF received, exiting...")
                     break
@@ -358,7 +567,8 @@ def main():
     logger.info(f"MCP_URL: {mcp_url}")
 
     # Create and run MCP server
-    server = LogDownloaderMCP(mcp_url, mcp_token)
+    download_dir = os.getenv("DOWNLOAD_DIR", r"C:\logs\device-logs")
+    server = LogDownloaderMCP(mcp_url, mcp_token, download_dir=download_dir)
 
     logger.info("MCP server initialized, waiting for requests...")
 

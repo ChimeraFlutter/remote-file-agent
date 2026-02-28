@@ -6,6 +6,7 @@ import 'services/file_service.dart';
 import 'services/device_settings.dart';
 import 'core/config.dart';
 import 'core/message_handler.dart';
+import 'utils/logger.dart';
 
 /// Callback type for status changes
 typedef StatusCallback = void Function(ConnectionStatus status);
@@ -54,6 +55,14 @@ class RemoteFileAgent {
     required this.deviceName,
     this.version = '1.0.0',
   }) {
+    // Initialize logger with file output if configured
+    if (config.logFilePath != null) {
+      AppLogger.init(logFilePath: config.logFilePath);
+      AppLogger.info('RemoteFileAgent initialized with log file: ${config.logFilePath}');
+    } else {
+      AppLogger.init();
+    }
+
     _fileService = FileService();
 
     _wsService = WebSocketService(

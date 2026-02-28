@@ -4,6 +4,7 @@ import 'package:uuid/uuid.dart';
 import '../models/message.dart';
 import '../services/file_service.dart';
 import '../services/websocket_service.dart';
+import '../utils/logger.dart';
 
 /// RPC message handler
 class MessageHandler {
@@ -20,7 +21,9 @@ class MessageHandler {
 
   /// Start listening for messages
   void startListening() {
+    AppLogger.info('MessageHandler: Starting to listen for messages');
     wsService.messageStream.listen((envelope) {
+      AppLogger.info('MessageHandler: Received message type=${envelope.type}, reqId=${envelope.reqId}');
       _handleMessage(envelope);
     });
   }
@@ -28,29 +31,38 @@ class MessageHandler {
   /// Handle message
   Future<void> _handleMessage(Envelope envelope) async {
     try {
+      AppLogger.debug('MessageHandler: Handling message type=${envelope.type}');
       switch (envelope.type) {
         case MessageType.listReq:
+          AppLogger.debug('MessageHandler: Handling listReq');
           await _handleListRequest(envelope);
           break;
         case MessageType.deleteReq:
+          AppLogger.debug('MessageHandler: Handling deleteReq');
           await _handleDeleteRequest(envelope);
           break;
         case MessageType.zipReq:
+          AppLogger.debug('MessageHandler: Handling zipReq');
           await _handleZipRequest(envelope);
           break;
         case MessageType.compressReq:
+          AppLogger.debug('MessageHandler: Handling compressReq');
           await _handleCompressRequest(envelope);
           break;
         case MessageType.uploadReq:
+          AppLogger.debug('MessageHandler: Handling uploadReq');
           await _handleUploadRequest(envelope);
           break;
         case MessageType.fileInfoReq:
+          AppLogger.info('MessageHandler: Handling fileInfoReq for reqId=${envelope.reqId}');
           await _handleFileInfoRequest(envelope);
           break;
         default:
+          AppLogger.warning('MessageHandler: Unknown message type=${envelope.type}');
           break;
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      AppLogger.error('MessageHandler: Error handling message', e, stackTrace);
       await _sendErrorResponse(envelope.reqId, 'INTERNAL_ERROR', e.toString());
     }
   }
@@ -209,11 +221,14 @@ class MessageHandler {
   /// Handle file info request (get file metadata without reading content)
   Future<void> _handleFileInfoRequest(Envelope envelope) async {
     try {
-      final payload = envelope.payload as Map<String, dynamic>;\
+      AppLogger.info('FileInfoRequest: Starting to handle reqId=${envelope.reqId}');
+      final payload = envelope.payload as Map<String, dynamic>;
       final targetPath = payload['path'] as String;
+      AppLogger.info('FileInfoRequest: Checking path=$targetPath');
 
       // Validate path
       if (fileService.containsPathTraversal(targetPath)) {
+        AppLogger.warning('FileInfoRequest: Path traversal detected for path=$targetPath');
         await _sendErrorResponse(
           envelope.reqId,
           'PATH_OUTSIDE_WHITELIST',
@@ -223,6 +238,7 @@ class MessageHandler {
       }
 
       if (!fileService.isPathAllowed(targetPath, allowedRootPaths)) {
+        AppLogger.warning('FileInfoRequest: Path not in whitelist: $targetPath, allowed: $allowedRootPaths');
         await _sendErrorResponse(
           envelope.reqId,
           'PATH_OUTSIDE_WHITELIST',
@@ -232,8 +248,10 @@ class MessageHandler {
         return;
       }
 
+      AppLogger.info('FileInfoRequest: Calling checkPath for $targetPath');
       // Use checkPath instead of getFileInfo (lightweight, no hash calculation)
       final pathInfo = await fileService.checkPath(targetPath);
+      AppLogger.info('FileInfoRequest: checkPath completed, exists=${pathInfo['exists']}');
 
       // Send response with path info
       final response = Envelope(
@@ -244,8 +262,11 @@ class MessageHandler {
         payload: pathInfo,
       );
 
+      AppLogger.info('FileInfoRequest: Sending response for reqId=${envelope.reqId}');
       await wsService.sendMessage(response);
-    } catch (e) {
+      AppLogger.info('FileInfoRequest: Response sent successfully');
+    } catch (e, stackTrace) {
+      AppLogger.error('FileInfoRequest: Failed for reqId=${envelope.reqId}', e, stackTrace);
       await _sendErrorResponse(envelope.reqId, 'FILE_INFO_FAILED', e.toString());
     }
   }
@@ -278,122 +299,89 @@ class MessageHandler {
         return;
       }
 
+      // Require upload_url
+      if (uploadUrl == null || uploadUrl.isEmpty) {
+        await _sendErrorResponse(
+          envelope.reqId,
+          'MISSING_UPLOAD_URL',
+          'upload_url is required for file upload',
+        );
+        return;
+      }
+
       // Get file info
       final fileInfo = await fileService.getFileInfo(targetPath);
 
-      // If upload_url is provided, upload via HTTP with progress reporting
-      if (uploadUrl != null && uploadUrl.isNotEmpty) {
-        try {
-          // Upload file via HTTP PUT with progress tracking
-          final file = File(targetPath);
-          final fileLength = await file.length();
+      // Upload file via HTTP PUT with progress tracking
+      final file = File(targetPath);
+      final fileLength = await file.length();
 
-          // Send initial progress (0%)
-          await _sendProgressMessage(envelope.reqId, 0, fileLength, 'Starting upload');
+      // Send initial progress (0%)
+      await _sendProgressMessage(envelope.reqId, 0, fileLength, 'Starting upload');
 
-          final client = HttpClient();
-          final request = await client.putUrl(Uri.parse(uploadUrl));
-          request.headers.set('Content-Type', 'application/octet-stream');
-          request.headers.set('Content-Length', fileLength.toString());
-          request.contentLength = fileLength;
+      final client = HttpClient();
+      final request = await client.putUrl(Uri.parse(uploadUrl));
+      request.headers.set('Content-Type', 'application/octet-stream');
+      request.headers.set('Content-Length', fileLength.toString());
+      request.contentLength = fileLength;
 
-          // Track upload progress
-          var uploadedBytes = 0;
-          var lastReportedPercent = 0;
-          const chunkSize = 64 * 1024; // 64KB chunks
-          const reportInterval = 1024 * 1024; // Report every 1MB
+      // Track upload progress
+      var uploadedBytes = 0;
+      var lastReportedPercent = 0;
+      const chunkSize = 64 * 1024; // 64KB chunks
+      const reportInterval = 1024 * 1024; // Report every 1MB
 
-          final fileStream = file.openRead();
-          await for (final chunk in fileStream) {
-            request.add(chunk);
-            uploadedBytes += chunk.length;
+      final fileStream = file.openRead();
+      await for (final chunk in fileStream) {
+        request.add(chunk);
+        uploadedBytes += chunk.length;
 
-            // Report progress every 1MB or when percentage changes by 5%
-            final currentPercent = (uploadedBytes * 100 / fileLength).round();
-            if (uploadedBytes % reportInterval < chunkSize ||
-                currentPercent >= lastReportedPercent + 5) {
-              await _sendProgressMessage(
-                envelope.reqId,
-                uploadedBytes,
-                fileLength,
-                'Uploading',
-              );
-              lastReportedPercent = currentPercent;
-            }
-          }
-
-          // Send final progress (100%)
-          await _sendProgressMessage(envelope.reqId, fileLength, fileLength, 'Upload complete');
-
-          final response = await request.close();
-
-          if (response.statusCode != 200) {
-            final responseBody = await response.transform(utf8.decoder).join();
-            throw Exception('HTTP upload failed: ${response.statusCode} - $responseBody');
-          }
-
-          client.close();
-
-          // Send success response (without file data)
-          final responsePayload = {
-            ...fileInfo,
-            'uploaded': true,
-            'upload_method': 'http',
-          };
-
-          final successResponse = Envelope(
-            type: MessageType.uploadResp,
-            reqId: envelope.reqId,
-            timestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-            deviceId: wsService.deviceId,
-            payload: responsePayload,
-          );
-
-          await wsService.sendMessage(successResponse);
-
-          // Cleanup temporary file if needed
-          if (cleanupAfter) {
-            await fileService.cleanupTempFile(targetPath);
-          }
-        } catch (e) {
-          await _sendErrorResponse(envelope.reqId, 'HTTP_UPLOAD_FAILED', e.toString());
-        }
-      } else {
-        // Fallback: Old method (WebSocket with Base64)
-        // This should not be used for large files
-        final fileBytes = await fileService.readFile(targetPath);
-
-        // Check file size limit (10MB for WebSocket)
-        if (fileBytes.length > 10 * 1024 * 1024) {
-          await _sendErrorResponse(
+        // Report progress every 1MB or when percentage changes by 5%
+        final currentPercent = (uploadedBytes * 100 / fileLength).round();
+        if (uploadedBytes % reportInterval < chunkSize ||
+            currentPercent >= lastReportedPercent + 5) {
+          await _sendProgressMessage(
             envelope.reqId,
-            'FILE_TOO_LARGE',
-            'File exceeds 10MB limit for WebSocket upload. Use HTTP upload instead.',
+            uploadedBytes,
+            fileLength,
+            'Uploading',
           );
-          return;
+          lastReportedPercent = currentPercent;
         }
+      }
 
-        // Send response (including file info and content)
-        final responsePayload = {
-          ...fileInfo,
-          'data': base64Encode(fileBytes),
-          'upload_method': 'websocket',
-        };
+      // Send final progress (100%)
+      await _sendProgressMessage(envelope.reqId, fileLength, fileLength, 'Upload complete');
 
-        final response = Envelope(
-          type: MessageType.uploadResp,
-          reqId: envelope.reqId,
-          timestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-          deviceId: wsService.deviceId,
-          payload: responsePayload,
-        );
+      final response = await request.close();
 
-        await wsService.sendMessage(response);
+      if (response.statusCode != 200) {
+        final responseBody = await response.transform(utf8.decoder).join();
+        throw Exception('HTTP upload failed: ${response.statusCode} - $responseBody');
+      }
 
-        // Cleanup temporary file if needed
-        if (cleanupAfter) {
-          await fileService.cleanupTempFile(targetPath);
-        }
+      client.close();
+
+      // Send success response
+      final responsePayload = {
+        ...fileInfo,
+        'uploaded': true,
+        'upload_method': 'http',
+      };
+
+      final successResponse = Envelope(
+        type: MessageType.uploadResp,
+        reqId: envelope.reqId,
+        timestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        deviceId: wsService.deviceId,
+        payload: responsePayload,
+      );
+
+      await wsService.sendMessage(successResponse);
+
+      // Cleanup temporary file if needed
+      if (cleanupAfter) {
+        await fileService.cleanupTempFile(targetPath);
       }
     } catch (e) {
       await _sendErrorResponse(envelope.reqId, 'UPLOAD_FAILED', e.toString());

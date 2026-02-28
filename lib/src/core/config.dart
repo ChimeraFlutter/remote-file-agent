@@ -28,6 +28,9 @@ class AgentConfig {
   /// Maximum concurrent uploads
   final int maxConcurrentUploads;
 
+  /// Log file path (optional, if null, no file logging)
+  final String? logFilePath;
+
   const AgentConfig({
     required this.serverUrl,
     required this.enrollToken,
@@ -37,6 +40,7 @@ class AgentConfig {
     this.maxReconnectAttempts = -1,
     this.uploadChunkSize = 1024 * 1024,
     this.maxConcurrentUploads = 3,
+    this.logFilePath,
   });
 
   /// Create config from simple parameters
@@ -45,6 +49,7 @@ class AgentConfig {
     required String enrollToken,
     required List<String> allowedPaths,
     int maxReconnectAttempts = -1,
+    String? logFilePath,
   }) {
     final roots = <AllowedRoot>[];
     for (int i = 0; i < allowedPaths.length; i++) {
@@ -63,6 +68,7 @@ class AgentConfig {
       enrollToken: enrollToken,
       allowedRoots: roots,
       maxReconnectAttempts: maxReconnectAttempts,
+      logFilePath: logFilePath,
     );
   }
 }
