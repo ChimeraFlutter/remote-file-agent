@@ -1,0 +1,16 @@
+# Python Dependencies for remote-file-agent
+#
+# This package uses only Python standard library.
+# No third-party dependencies are required.
+#
+# Minimum Python version: 3.7+
+#
+# Standard library modules used:
+# - sys, os, json
+# - urllib.request, urllib.error, urllib.parse
+# - datetime, time
+# - typing
+# - ntpath (Windows path handling)
+# - logging, threading
+# - zipfile
+# - io (UTF-8 encoding on Windows)
